@@ -79,14 +79,6 @@ def coin_params(c, vol_step, vanish, gmu=None, gvol=None):
     if c["rank"] <= 5:
         lam *= 0.6
     return {"x0": ls[-1], "drift": drift, "vol": vol, "lam": lam, "rank": c["rank"]}
-    lam = min(0.35, 0.10 + 0.5 * vanish)
-    if drift > 0.1:
-        lam *= 0.5
-    elif drift < -0.1:
-        lam *= 1.5
-    if c["rank"] <= 5:
-        lam *= 0.6
-    return {"x0": ls[-1], "drift": drift, "vol": vol, "lam": lam, "rank": c["rank"]}
 
 N_PATHS = 2500
 SEED = 20261112
