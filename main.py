@@ -2,9 +2,6 @@
 # Reads /input/task.json + /input/history.ndjson, writes /output/forecast.json.
 # Method: per-coin log10-cap drift + volatility + collapse hazard, damped with age;
 # seeded Monte Carlo over the 7 answer reads in task.json; newcomer mass left unnamed.
-# v3 (2026-11-12): hierarchical pooling — per-coin drift/vol from 1-5 obs are too
-# noisy, so every coin gets the market-wide drift/vol and differs only by start
-# cap, rank and collapse hazard; sizes centred on the realised cap at each rank.
 import json, math, os, random
 
 IN = os.environ.get("MAKEFUN_INPUT_DIR", "/input")
@@ -61,17 +58,20 @@ def global_stats(marks, traj):
         rets += [y - x for x, y in zip(ls, ls[1:])]
     mu = sum(rets) / len(rets) if rets else 0.0
     sd = (sum((x - mu) ** 2 for x in rets) / len(rets)) ** 0.5 if len(rets) > 1 else 0.12
-    return max(0.02, min(0.5, v)), max(0.05, min(0.30, sd)), mu
+    return max(0.02, min(0.5, v)), max(0.05, min(0.30, sd))
 
-def coin_params(c, vol_step, vanish, gmu=None, gvol=None):
-    # v3: hierarchical pooling. Per-coin drift/vol from 1-5 observations are
-    # too noisy to trust; every coin gets the market-wide drift and vol, and
-    # coins differ only by starting cap, rank, and the collapse hazard.
-    lam0 = min(0.35, 0.10 + 0.5 * vanish)
+def coin_params(c, vol_step, vanish):
     ls = c["logs"]
-    drift = max(-0.6, min(0.6, gmu * 6)) if gmu is not None else 0.0
-    vol = max(0.15, min(0.70, gvol * 6 ** 0.5)) if gvol is not None else 0.3
-    lam = lam0
+    n = len(ls) - 1
+    if n >= 1:
+        rs = [y - x for x, y in zip(ls, ls[1:])]
+        mu = sum(rs) / n
+        sd = (sum((x - mu) ** 2 for x in rs) / n) ** 0.5 if n > 1 else vol_step
+    else:
+        mu, sd = 0.0, vol_step
+    drift = max(-0.6, min(0.6, mu * 6 * n / (n + 3)))
+    vol = max(0.15, min(0.70, sd * 6 ** 0.5))
+    lam = min(0.35, 0.10 + 0.5 * vanish)
     if drift > 0.1:
         lam *= 0.5
     elif drift < -0.1:
@@ -130,12 +130,10 @@ def _above(x, mean, sd):
 def _floor6(p):
     return math.floor(p * 1e6) / 1e6
 
-def assemble(task, place_counts, size_samp, read_hours, realized=None):
+def assemble(task, place_counts, size_samp, read_hours):
     edges = task["size"]["edges"]
     mean_h = sum(read_hours) / len(read_hours) if read_hours else 0.0
     base = min(0.45, 0.06 + 0.035 * mean_h)
-    # v3: sizes are centred on the realised cap of the coin at that rank
-    # (the simulation's spread sets the width, not the centre).
     probs = []
     sizes = []
     for k in range(1, 6):
@@ -157,8 +155,6 @@ def assemble(task, place_counts, size_samp, read_hours, realized=None):
         mean = sum(xs) / len(xs)
         var = sum((x - mean) ** 2 for x in xs) / len(xs)
         sd = max(0.25, var ** 0.5)
-        if realized is not None:
-            mean = realized[k - 1]
         bins = []
         for b in range(len(edges) + 1):
             lo = -float("inf") if b == 0 else edges[b - 1]
@@ -188,15 +184,14 @@ def main():
     if not marks:
         raise SystemExit("no marks")
     traj = build_coins(marks)
-    vanish, vol_step, gmu = global_stats(marks, traj)
+    vanish, vol_step = global_stats(marks, traj)
     last = marks[-1]
     coins = [r["mint"] for r in sorted(last["rows"], key=lambda r: r["rank"])[:180]]
-    params = [coin_params(traj[m], vol_step, vanish, gmu, vol_step) for m in coins]
+    params = [coin_params(traj[m], vol_step, vanish) for m in coins]
     t_last = _parse_time(last["at"])
     read_hours = [(_parse_time(s) - t_last) / 3600.0 for s in task["reads"]]
     place_counts, size_samp = simulate(params, coins, read_hours)
-    realized = [logcap(r) for r in sorted(last["rows"], key=lambda r: r["rank"])[:5]]
-    probs, sizes, top5 = assemble(task, place_counts, size_samp, read_hours, realized)
+    probs, sizes, top5 = assemble(task, place_counts, size_samp, read_hours)
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, task["output"]), "w") as f:
         f.write(json.dumps({"probabilities": probs, "top5": top5, "sizes": sizes}) + "\n")
