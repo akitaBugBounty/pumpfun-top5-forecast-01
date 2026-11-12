@@ -2,9 +2,6 @@
 # Reads /input/task.json + /input/history.ndjson, writes /output/forecast.json.
 # Method: per-coin log10-cap drift + volatility + collapse hazard, damped with age;
 # seeded Monte Carlo over the 7 answer reads in task.json; newcomer mass left unnamed.
-# v2 (tuned on local holdouts vs the house persistence baseline): drift x0.3 and
-# vol x0.5 — 1-5 obs per coin make raw drift/vol far too noisy to trust at face
-# value — and a larger unnamed reserve (base 0.25, cap 0.55) for movers/newcomers.
 import json, math, os, random
 
 IN = os.environ.get("MAKEFUN_INPUT_DIR", "/input")
@@ -72,8 +69,8 @@ def coin_params(c, vol_step, vanish):
         sd = (sum((x - mu) ** 2 for x in rs) / n) ** 0.5 if n > 1 else vol_step
     else:
         mu, sd = 0.0, vol_step
-    drift = max(-0.6, min(0.6, mu * 6 * n / (n + 3))) * 0.3
-    vol = max(0.15, min(0.70, sd * 6 ** 0.5)) * 0.5
+    drift = max(-0.6, min(0.6, mu * 6 * n / (n + 3)))
+    vol = max(0.15, min(0.70, sd * 6 ** 0.5))
     lam = min(0.35, 0.10 + 0.5 * vanish)
     if drift > 0.1:
         lam *= 0.5
@@ -136,7 +133,7 @@ def _floor6(p):
 def assemble(task, place_counts, size_samp, read_hours):
     edges = task["size"]["edges"]
     mean_h = sum(read_hours) / len(read_hours) if read_hours else 0.0
-    base = min(0.55, 0.25 + 0.035 * mean_h)
+    base = min(0.45, 0.06 + 0.035 * mean_h)
     probs = []
     sizes = []
     for k in range(1, 6):
